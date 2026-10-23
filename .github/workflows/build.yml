@@ -415,6 +415,122 @@ jobs:
               print('sepolicy.c patched OK')
           PYEOF
 
+          echo "===== 回滚selinux源文件 ====="
+          git -C KernelSU checkout -- kernel/selinux/rules.c kernel/selinux/sepolicy.c
+          echo "回滚完成"
+
+
+          echo "===== 4.19兼容: selinux 5.6 API v2 ====="
+          python3 - <<'PYEOF'
+          import re, sys
+
+          V = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)'
+
+          def rep(s, old, new, need, tag):
+              n = s.count(old)
+              assert n == need, '%s: hit %d, expect %d' % (tag, n, need)
+              return s.replace(old, new)
+
+          # ---------- rules.c ----------
+          p = 'KernelSU/kernel/selinux/rules.c'
+          s = open(p).read()
+          if 'KERNEL_VERSION(5, 6, 0)' in s:
+              print('rules.c already patched, skip')
+          else:
+              # 1) 两个函数顶部声明: 4.19 只要 db
+              s = rep(s,
+                  '    struct selinux_policy *pol, *old_pol;\n    struct policydb *db;\n',
+                  '    ' + V + '\n'
+                + '    struct selinux_policy *pol, *old_pol;\n'
+                + '    struct policydb *db;\n'
+                + '#else\n'
+                + '    struct policydb *db;\n'
+                + '#endif\n', 2, 'decl')
+              # 2) 加锁
+              s = rep(s,
+                  '    mutex_lock(&selinux_state.policy_mutex);\n',
+                  '    ' + V + '\n'
+                + '    mutex_lock(&selinux_state.policy_mutex);\n'
+                + '#else\n'
+                + '    write_lock_irq(&selinux_state.ss->policy_rwlock);\n'
+                + '#endif\n', 2, 'lock')
+              # 3) 备份块整段守卫(apply里出现一次)
+              m = re.search(
+                  r'^    old_pol = rcu_dereference_protected.*?^    \}\n',
+                  s, re.S | re.M)
+              assert m, 'backup block not found'
+              s = s[:m.start()] + '    ' + V + '\n' + m.group(0) + '#endif\n' + s[m.end():]
+              # 4) dup一行(两处)
+              s = rep(s,
+                  '    pol = ksu_dup_sepolicy(old_pol);\n',
+                  '    ' + V + '\n'
+                + '    pol = ksu_dup_sepolicy(old_pol);\n'
+                + '#else\n'
+                + '    db = &selinux_state.ss->policydb;\n'
+                + '#endif\n', 2, 'dup')
+              # 5) rcu_assign 一行(两处)
+              s = rep(s,
+                  '    rcu_assign_pointer(selinux_state.policy, pol);\n',
+                  '    ' + V + '\n'
+                + '    rcu_assign_pointer(selinux_state.policy, pol);\n'
+                + '#else\n'
+                + '    (void)pol;\n'
+                + '#endif\n', 2, 'rcu_assign')
+              # 6) 成功出口: sync+destroy(两处)
+              s = rep(s,
+                  '    synchronize_rcu();\n    ksu_destroy_sepolicy(old_pol);\n',
+                  '    ' + V + '\n'
+                + '    synchronize_rcu();\n'
+                + '    ksu_destroy_sepolicy(old_pol);\n'
+                + '#endif\n', 2, 'sync_destroy')
+              # 7) 解锁出口
+              s = rep(s,
+                  'out_unlock:\n    mutex_unlock(&selinux_state.policy_mutex);\n',
+                  'out_unlock:\n    ' + V + '\n'
+                + '    mutex_unlock(&selinux_state.policy_mutex);\n'
+                + '#else\n'
+                + '    write_unlock_irq(&selinux_state.ss->policy_rwlock);\n'
+                + '#endif\n', 2, 'unlock')
+              # 8) 失败出口 handle_sepolicy 独有
+              s = rep(s,
+                  'out_drop_new_policy:\n    ksu_destroy_sepolicy(pol);\n',
+                  'out_drop_new_policy:\n    ' + V + '\n'
+                + '    ksu_destroy_sepolicy(pol);\n'
+                + '#else\n'
+                + '    (void)pol;\n'
+                + '#endif\n', 1, 'drop')
+              open(p, 'w').write(s)
+              print('rules.c patched OK')
+
+          # ---------- sepolicy.c ----------
+          p = 'KernelSU/kernel/selinux/sepolicy.c'
+          s = open(p).read()
+          if 'KERNEL_VERSION(5, 6, 0)' in s:
+              print('sepolicy.c already patched, skip')
+          else:
+              def body_end(t, start):
+                  k = t.index('{', start)
+                  d = 0
+                  while True:
+                      d += (t[k] == '{') - (t[k] == '}')
+                      if d == 0:
+                          return k
+                      k += 1
+              i = s.index('void ksu_destroy_sepolicy')
+              j = s.index('struct selinux_policy *ksu_dup_sepolicy')
+              assert i < j, 'order changed'
+              e = s.index('\n', body_end(s, j)) + 1
+              block = s[i:e]
+              stub = ('    ' + V + '\n'
+                    + block.rstrip('\n') + '\n'
+                    + '#else\n'
+                    + 'void ksu_destroy_sepolicy(struct selinux_policy *pol) { (void)pol; }\n'
+                    + 'struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol) { (void)old_pol; return NULL; }\n'
+                    + '#endif\n')
+              open(p, 'w').write(s[:i] + stub + s[e:])
+              print('sepolicy.c patched OK')
+          PYEOF
+
 
 
           
