@@ -426,6 +426,34 @@ jobs:
               print('sepolicy.c patched OK')
           PYEOF
 
+          echo "===== 4.19兼容: selinux lock补丁 ====="
+          python3 - <<'PYEOF'
+          V = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)'
+          p = 'KernelSU/kernel/selinux/rules.c'
+          s = open(p).read()
+          marker = V + '\n    mutex_lock(&selinux_state.policy_mutex);\n'
+          if marker in s:
+              print('rules.c lock already patched, skip')
+          else:
+              old = '    mutex_lock(&selinux_state.policy_mutex);\n'
+              new = ('    ' + V + '\n'
+                   + '    mutex_lock(&selinux_state.policy_mutex);\n'
+                   + '#else\n'
+                   + '    write_lock_irq(&selinux_state.ss->policy_rwlock);\n'
+                   + '#endif\n')
+              n = s.count(old)
+              assert n == 2, 'lock: hit %d, expect 2' % n
+              s = s.replace(old, new)
+              open(p, 'w').write(s)
+              print('rules.c lock patched OK (%d处)' % n)
+          PYEOF
+
+
+
+
+
+          
+
           
 
           echo "===== 并入 drivers/kernelsu ====="
