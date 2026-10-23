@@ -345,6 +345,78 @@ jobs:
           PYEOF
 
 
+          echo "===== 4.19兼容: selinux 5.6 API ====="
+          python3 - <<'PYEOF'
+          import re
+          V = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)'
+          # ---- rules.c: 两个函数的 dup/swap 模式换成 4.19 就地修改 ----
+          p = 'KernelSU/kernel/selinux/rules.c'
+          s = open(p).read()
+          if 'KERNEL_VERSION(5, 6, 0)' in s:
+              print('rules.c already patched, skip')
+          else:
+              old = '    struct selinux_policy *pol, *old_pol;\n    struct policydb *db;\n'
+              new = (V + '\n' + old + '#else\n    struct policydb *db;\n#endif\n')
+              assert s.count(old) == 2, 'decl x%d' % s.count(old)
+              s = s.replace(old, new)
+              old = '    mutex_lock(&selinux_state.policy_mutex);\n'
+              new = (V + '\n' + old + '#else\n'
+                     '    write_lock_irq(&selinux_state.ss->policy_rwlock);\n#endif\n')
+              assert s.count(old) == 2, 'lock x%d' % s.count(old)
+              s = s.replace(old, new)
+              pat = re.compile(r' {4}old_pol = rcu_dereference_protected.*? {4}db = &pol->policydb;\n', re.S)
+              hits = pat.findall(s)
+              assert len(hits) == 2, 'dupregion x%d' % len(hits)
+              s = pat.sub(lambda m: V + '\n' + m.group(0) +
+                          '#else\n    db = &selinux_state.ss->policydb;\n#endif\n', s)
+              old = ('    rcu_assign_pointer(selinux_state.policy, pol);\n'
+                     '    synchronize_rcu();\n'
+                     '    ksu_destroy_sepolicy(old_pol);\n')
+              new = (V + '\n' + old + '#else\n'
+                     '    write_unlock_irq(&selinux_state.ss->policy_rwlock);\n#endif\n')
+              assert s.count(old) == 2, 'swap x%d' % s.count(old)
+              s = s.replace(old, new)
+              old = 'out_unlock:\n    mutex_unlock(&selinux_state.policy_mutex);\n'
+              new = ('out_unlock:\n' + V + '\n'
+                     '    mutex_unlock(&selinux_state.policy_mutex);\n#endif\n')
+              assert s.count(old) == 2, 'unlock x%d' % s.count(old)
+              s = s.replace(old, new)
+              old = 'out_drop_new_policy:\n    ksu_destroy_sepolicy(pol);\n'
+              new = ('out_drop_new_policy:\n' + V + '\n'
+                     '    ksu_destroy_sepolicy(pol);\n#else\n'
+                     '    write_unlock_irq(&selinux_state.ss->policy_rwlock);\n#endif\n')
+              assert s.count(old) == 1, 'drop x%d' % s.count(old)
+              s = s.replace(old, new)
+              open(p, 'w').write(s)
+              print('rules.c patched OK')
+          # ---- sepolicy.c: dup/destroy 两个函数整体守卫 + 空实现 ----
+          p = 'KernelSU/kernel/selinux/sepolicy.c'
+          s = open(p).read()
+          i = s.find('void ksu_destroy_sepolicy')
+          j = s.find('struct selinux_policy *ksu_dup_sepolicy')
+          assert i != -1 and j != -1 and i < j, 'sepolicy funcs not found'
+          def fend(t, start):
+              k = t.index('{', start); d = 0
+              while True:
+                  d += (t[k] == '{') - (t[k] == '}')
+                  if d == 0:
+                      return k
+                  k += 1
+          e = s.index('\n', fend(s, j)) + 1
+          block = s[i:e]
+          if 'KERNEL_VERSION(5, 6, 0)' in block:
+              print('sepolicy.c already patched, skip')
+          else:
+              stub = (V + '\n' + block + '#else\n'
+                      'void ksu_destroy_sepolicy(struct selinux_policy *pol) { }\n'
+                      'struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol) { return NULL; }\n'
+                      '#endif\n')
+              open(p, 'w').write(s[:i] + stub + s[e:])
+              print('sepolicy.c patched OK')
+          PYEOF
+
+
+
           
 
           echo "===== 并入 drivers/kernelsu ====="
