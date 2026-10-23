@@ -188,6 +188,27 @@ jobs:
           print('file_wrapper.c patched OK')
           PYEOF
 
+          echo "===== 4.19兼容: seccomp_cache ====="
+          python3 - <<'PYEOF'
+          p = 'KernelSU/kernel/infra/seccomp_cache.c'
+          s = open(p).read()
+          if 'KERNEL_VERSION(5, 9, 0)' not in s:
+              head = ('#include <linux/version.h>\n'
+                      '#include <linux/types.h>\n'
+                      '#include <linux/seccomp.h>\n'
+                      '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)\n')
+              tail = ('#else\n'
+                      '/* seccomp cache needs 5.9+; no-op stubs for old kernels */\n'
+                      'void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr) { }\n'
+                      'void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr) { }\n'
+                      '#endif\n')
+              open(p, 'w').write(head + s + tail)
+              print('seccomp_cache.c patched OK')
+          else:
+              print('seccomp_cache.c already patched, skip')
+          PYEOF
+
+
 
           
 
