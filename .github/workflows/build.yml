@@ -46,6 +46,7 @@ jobs:
           mv proton-clang-master proton-clang
           rm -f clang.zip
           echo "$PWD/proton-clang/bin" >> "$GITHUB_PATH"
+          mv proton-clang/bin/ld proton-clang/bin/ld.disabled
 
       - name: 3.拉源码并集成FinaSU+SUSFS+NoMount+手动hook
         run: |
