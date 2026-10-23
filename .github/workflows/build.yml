@@ -6,7 +6,7 @@ on:
       kernel_branch:
         description: "LineageOS内核分支，须与手机ROM对应"
         required: true
-        default: "lineage-22.2"
+        default: "lineage-24.0"
       defconfig:
         description: "defconfig名，留空自动查找apollo/apollon"
         required: false
