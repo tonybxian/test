@@ -1,0 +1,275 @@
+name: apollo-kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: "LineageOS内核分支，必须与手机ROM一致"
+        required: true
+        default: "lineage-22.2"
+      defconfig:
+        description: "defconfig名，留空自动查找apollo"
+        required: false
+        default: ""
+      ksu_repo:
+        description: "KSU分支仓库 owner/repo"
+        required: false
+        default: "LyraVoid/FinaSU"
+
+permissions:
+  contents: write
+
+env:
+  KBRANCH: ${{ github.event.inputs.kernel_branch || 'lineage-22.2' }}
+  DEFCFG: ${{ github.event.inputs.defconfig }}
+  KSUREPO: ${{ github.event.inputs.ksu_repo || 'LyraVoid/FinaSU' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: 0.检出仓库
+        uses: actions/checkout@v4
+
+      - name: 1.安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex cpio zip unzip perl rsync patch \
+            libssl-dev libelf-dev libncurses-dev \
+            binutils-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: 2.下载编译器
+        run: |
+          wget -q https://github.com/kdrag0n/proton-clang/archive/refs/heads/master.zip -O clang.zip
+          unzip -q clang.zip
+          mv proton-clang-master proton-clang
+          rm -f clang.zip
+          echo "$PWD/proton-clang/bin" >> "$GITHUB_PATH"
+
+      - name: 3.拉源码并集成FinaSU+SUSFS+NoMount+手动hook
+        run: |
+          git clone --depth=1 -b "$KBRANCH" https://github.com/LineageOS/android_kernel_xiaomi_sm8250 kernel || {
+            echo "::error::分支 $KBRANCH 不存在，可用分支如下："
+            git ls-remote --heads https://github.com/LineageOS/android_kernel_xiaomi_sm8250 | awk '{print $2}' || true
+            exit 1
+          }
+          cd kernel
+
+          echo "===== 找defconfig ====="
+          if [ -n "$DEFCFG" ]; then
+            CFG=$(find arch/arm64/configs -name "${DEFCFG}*" | head -n1)
+          else
+            CFG=$(find arch/arm64/configs -iname '*apollo*defconfig' | sort | head -n1)
+          fi
+          if [ -z "$CFG" ]; then
+            echo "::error::没找到apollo的defconfig，现有全部："
+            find arch/arm64/configs -name '*_defconfig' || true
+            exit 1
+          fi
+          echo "✅ defconfig: $CFG"
+          echo "CFGFILE=$CFG" >> "$GITHUB_ENV"
+          echo "MAKECFG=${CFG#arch/arm64/configs/}" >> "$GITHUB_ENV"
+
+          echo "===== FinaSU ====="
+          if ! git clone --depth=1 "https://github.com/$KSUREPO" KernelSU; then
+            echo "::error::克隆 https://github.com/$KSUREPO 失败，请检查参数 ksu_repo 填的 owner/repo"
+            exit 1
+          fi
+          if [ ! -d KernelSU/kernel ]; then
+            echo "::error::$KSUREPO 里没有 kernel/ 目录，不是标准KSU结构"
+            exit 1
+          fi
+          echo "---- 以下是该仓库README前60行 ----"
+          head -n 60 KernelSU/README.md 2>/dev/null || true
+
+          echo "===== SUSFS ====="
+          if ! git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs; then
+            if ! git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs; then
+              echo "::warning::susfs克隆失败，本次构建不含SUSFS"
+            fi
+          fi
+          if [ -d susfs/kernel_patches ]; then
+            P50=$(find susfs -name '*susfs*4.19*.patch' | head -n1)
+            if [ -n "$P50" ]; then
+              if git apply --check "$P50" 2>/dev/null; then
+                git apply "$P50"
+                echo "✅ susfs 4.19 内核补丁已应用"
+              elif patch -p1 -F3 --no-backup-if-mismatch --dry-run < "$P50" >/dev/null 2>&1; then
+                patch -p1 -F3 --no-backup-if-mismatch < "$P50" >/dev/null 2>&1
+                echo "⚠️ susfs补丁以fuzz方式应用"
+              else
+                echo "::warning::susfs 4.19补丁不匹配，隐藏能力可能不完整"
+              fi
+            else
+              echo "::warning::没找到4.19的susfs补丁"
+            fi
+            if [ -d susfs/kernel_patches/fs ]; then
+              ( cd susfs/kernel_patches/fs && find . -type f ) | while read -r f; do
+                if [ ! -f "fs/$f" ]; then
+                  cp "susfs/kernel_patches/fs/$f" "fs/$f"
+                  echo "ℹ️ 补齐缺失文件 fs/$f"
+                fi
+              done
+            fi
+            if [ -d susfs/kernel_patches/include/linux ]; then
+              ( cd susfs/kernel_patches/include/linux && find . -type f ) | while read -r f; do
+                if [ ! -f "include/linux/$f" ]; then
+                  cp "susfs/kernel_patches/include/linux/$f" "include/linux/$f"
+                fi
+              done
+            fi
+            PF=""
+            for d in FinaSU SukiSU-Ultra KernelSU-Next KernelSU; do
+              T=$(find susfs/kernel_patches -type d -name "$d" | head -n1)
+              if [ -n "$T" ]; then
+                PF=$(find "$T" -name '*.patch' | head -n1)
+                if [ -n "$PF" ]; then break; fi
+              fi
+            done
+            if [ -z "$PF" ]; then
+              PF=$(find susfs/kernel_patches -maxdepth 1 \( -name '10_*.patch' -o -name '69_*.patch' \) | head -n1)
+            fi
+            if [ -n "$PF" ]; then
+              echo "KSU侧susfs补丁: $PF"
+              if patch -d KernelSU -p1 -F3 --dry-run < "$PF" >/dev/null 2>&1; then
+                patch -d KernelSU -p1 -F3 --no-backup-if-mismatch < "$PF" >/dev/null 2>&1
+                echo "✅ KSU侧susfs补丁已应用"
+              else
+                echo "::warning::KSU侧补丁不匹配(该分支可能已内置susfs)"
+              fi
+            fi
+          fi
+
+          echo "===== 并入 drivers/kernelsu ====="
+          rm -rf drivers/kernelsu
+          cp -a KernelSU/kernel drivers/kernelsu
+          if ! grep -q 'kernelsu' drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          fi
+          if ! grep -q 'kernelsu/Kconfig' drivers/Kconfig; then
+            echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          fi
+          if [ ! -f drivers/kernelsu/Kconfig ]; then
+            printf 'config KSU\n\tbool "KernelSU"\n\tdefault y\n\nconfig KSU_SUSFS\n\tbool "SUSFS support"\n\tdefault y\n' > drivers/kernelsu/Kconfig
+          fi
+
+          echo "===== NoMount(非GKI内核集成) ====="
+          if git clone --depth=1 https://github.com/backslashxx/nomount.git nomount_repo; then
+            for r in nomount_repo/README.md nomount_repo/kernel/README.md; do
+              if [ -f "$r" ]; then
+                echo "---- $r 前80行 ----"
+                head -n 80 "$r"
+              fi
+            done
+            if [ -d nomount_repo/kernel ]; then
+              mkdir -p fs/nomount
+              cp -a nomount_repo/kernel/. fs/nomount/
+              find nomount_repo -name '*.patch' -not -path '*/.git/*' | while read -r p; do
+                if git apply --check "$p" 2>/dev/null; then
+                  git apply "$p"
+                  echo "✅ 应用补丁 $(basename "$p")"
+                elif patch -p1 -F3 --no-backup-if-mismatch --dry-run < "$p" >/dev/null 2>&1; then
+                  patch -p1 -F3 --no-backup-if-mismatch < "$p" >/dev/null 2>&1
+                  echo "⚠️ fuzz应用 $(basename "$p")"
+                else
+                  echo "ℹ️ 跳过 $(basename "$p")"
+                fi
+              done
+              if [ -f fs/nomount/Makefile ] && [ -f fs/nomount/Kconfig ]; then
+                grep -q 'nomount' fs/Makefile || echo 'obj-$(CONFIG_NOMOUNT) += nomount/' >> fs/Makefile
+                grep -q 'nomount/Kconfig' fs/Kconfig || echo 'source "fs/nomount/Kconfig"' >> fs/Kconfig
+                echo "CONFIG_NOMOUNT=y" >> "$CFG"
+                echo "✅ NoMount按通用kbuild方式并入"
+              else
+                echo "::warning::nomount/kernel非标准结构——对照上方README日志，在本步骤补几行命令后重跑"
+              fi
+            else
+              echo "::warning::nomount仓库没有kernel/目录，请读上方日志后补充集成步骤"
+            fi
+          else
+            echo "::warning::nomount克隆失败"
+          fi
+
+          echo "===== 手动hook(非GKI) ====="
+          if python3 "$GITHUB_WORKSPACE/hooks.py"; then
+            echo "✅ 手动hook注入成功"
+          else
+            echo "HOOKS_FAILED=1" >> "$GITHUB_ENV"
+            echo "::warning::手动hook失败，编译时回退kprobes模式"
+          fi
+
+          echo "===== defconfig ====="
+          grep -vE '^(CONFIG_KSU|# CONFIG_KSU|CONFIG_KPROBES|# CONFIG_KPROBES)' "$CFG" > "$CFG.new" && mv "$CFG.new" "$CFG"
+          printf '\n# --- KSU/SUSFS/NoMount ---\nCONFIG_KSU=y\nCONFIG_KSU_SUSFS=y\n# CONFIG_KPROBES is not set\n' >> "$CFG"
+          echo "✅ 集成完成"
+
+      - name: 4.编译
+        working-directory: kernel
+        run: |
+          if [ "${HOOKS_FAILED:-0}" = "1" ]; then
+            echo "CONFIG_KPROBES=y" >> "$CFGFILE"
+            echo "ℹ️ 回退kprobes模式"
+          fi
+          make O=out ARCH=arm64 CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-w" "$MAKECFG"
+          if grep -q '^CONFIG_KSU=y' out/.config; then
+            echo "✅ CONFIG_KSU=y 已生效"
+          else
+            echo "::error::CONFIG_KSU未生效，集成失败"
+            exit 1
+          fi
+          if grep -q '^CONFIG_KSU_SUSFS=y' out/.config; then
+            echo "✅ CONFIG_KSU_SUSFS=y 已生效"
+          else
+            echo "::warning::CONFIG_KSU_SUSFS未生效(susfs补丁可能没打上)"
+          fi
+          make O=out ARCH=arm64 CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            KCFLAGS="-w" -j"$(nproc)"
+          ls -la out/arch/arm64/boot/ || true
+
+      - name: 5.打包AnyKernel3
+        working-directory: kernel
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+          cd AnyKernel3
+          rm -rf .git .github README.md
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel.sh || true
+          KIMG=""
+          for f in Image.gz-dtb Image.gz Image; do
+            if [ -f "../out/arch/arm64/boot/$f" ]; then
+              cp "../out/arch/arm64/boot/$f" ./"$f"
+              KIMG="$f"
+              break
+            fi
+          done
+          if [ -z "$KIMG" ]; then
+            echo "::error::没找到内核镜像"
+            ls -la ../out/arch/arm64/boot/ || true
+            exit 1
+          fi
+          echo "内核镜像: $KIMG"
+          zip -r9 ../apollo_finasu_susfs_nomount.zip . >/dev/null
+          ls -la ../apollo_finasu_susfs_nomount.zip
+
+      - name: 6.上传Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apollo_finasu_susfs_nomount
+          path: kernel/apollo_finasu_susfs_nomount.zip
+          if-no-files-found: error
+
+      - name: 7.发布Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "build-${GITHUB_RUN_NUMBER}" \
+            "kernel/apollo_finasu_susfs_nomount.zip" \
+            --title "apollo kernel build-${GITHUB_RUN_NUMBER}" \
+            --notes "自动构建：FinaSU+SUSFS+NoMount。仅限apollo(K30S至尊纪念版)，刷前备份boot！" \
+            || echo "::warning::发布Release失败，请改从Artifact下载"
