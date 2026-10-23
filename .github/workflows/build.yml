@@ -208,6 +208,25 @@ jobs:
               print('seccomp_cache.c already patched, skip')
           PYEOF
 
+          echo "===== 4.19兼容: su_mount_ns ====="
+          python3 - <<'PYEOF'
+          p = 'KernelSU/kernel/infra/su_mount_ns.c'
+          s = open(p).read()
+          if '__has_include' not in s:
+              s = s.replace('#include <uapi/linux/mount.h>',
+                  '#if __has_include(<uapi/linux/mount.h>)\n'
+                  '#include <uapi/linux/mount.h>\n'
+                  '#else\n'
+                  '#include <linux/fs.h>\n'
+                  '#include <linux/mount.h>\n'
+                  '#endif\n', 1)
+              open(p, 'w').write(s)
+              print('su_mount_ns.c patched OK')
+          else:
+              print('su_mount_ns.c already patched, skip')
+          PYEOF
+
+
 
 
           
