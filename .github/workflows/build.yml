@@ -313,6 +313,38 @@ jobs:
           PYEOF
 
 
+          echo "===== 4.19兼容: app_profile seccomp字段 ====="
+          python3 - <<'PYEOF'
+          import re, sys
+          p = 'KernelSU/kernel/policy/app_profile.c'
+          s = open(p).read()
+          if 'KERNEL_VERSION(5, 5, 0)' in s:
+              print('app_profile.c already patched, skip')
+              sys.exit(0)
+          # 1) filter_count 是 5.5 加的; 4.19 没有, 裁掉该行
+          pat = re.compile(r'(?m)^(?P<i>[ \t]*)(?P<s>[^\n]*seccomp\.filter_count[^\n]*)$')
+          m = pat.search(s)
+          assert m, 'filter_count line not found'
+          i = m.group('i')
+          blk = (i + '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 5, 0)\n'
+                 + i + m.group('s') + '\n'
+                 + i + '#else\n'
+                 + i + '/* 4.19: no filter_count; ref-count handles cleanup */\n'
+                 + i + '#endif\n')
+          s = s[:m.start()] + blk + s[m.end():]
+          # 2) seccomp_cache 相关调用 (5.9+) 一并守卫
+          for name in ('ksu_seccomp_clear_cache', 'ksu_seccomp_allow_cache'):
+              cnt = len(re.findall(r'(?m)^[ \t]*' + name + r'\(', s))
+              if cnt:
+                  s = re.sub(r'(?m)^(?P<i>[ \t]*)(?P<s>[ \t]*' + name + r'\([^\n]*\);[ \t]*)$',
+                             lambda m: (m.group('i') + '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)\n'
+                                        + m.group('s') + '\n' + m.group('i') + '#endif\n'), s)
+                  print('guarded', name, 'x%d' % cnt)
+          open(p, 'b' and 'w').write(s)
+          print('app_profile.c patched OK')
+          PYEOF
+
+
           
 
           echo "===== 并入 drivers/kernelsu ====="
