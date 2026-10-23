@@ -150,6 +150,45 @@ jobs:
             sed -i 's|^\([[:space:]]*MODULE_IMPORT_NS([^)]*);[[:space:]]*\)$|#ifdef MODULE_IMPORT_NS\n\1\n#endif|' "$f"
           done
 
+          echo "===== 4.19兼容补丁: iopoll/remap_file_range ====="
+          python3 - <<'PYEOF'
+          import re
+          p = 'KernelSU/kernel/infra/file_wrapper.c'
+          s = open(p).read()
+          # 1) iopoll 的 bool-spin 旧分支: #else 改成 #elif >=5.1, 4.19 下不编译
+          sig = 'ksu_wrapper_iopoll(struct kiocb *kiocb, bool spin)'
+          i = s.find(sig)
+          assert i != -1, 'iopoll signature not found'
+          c = [m for m in re.finditer(r'(?m)^#else\b.*$', s[:i]) if i - m.end() < 500]
+          assert c, 'iopoll #else not found'
+          m = c[-1]
+          s = s[:m.start()] + '#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)' + s[m.end():]
+          # 2) 给 p->ops.xxx = ... 的赋值行加版本守卫
+          def guard_line(pat, ver):
+              pre = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(%s)' % ver
+              return re.sub(r'(?m)^([^\n]*\b' + pat + r'[^\n]*)$', pre + '\n\\1\n#endif', s)
+          s = guard_line(r'ops\.iopoll\s*=', '5, 1, 0')
+          s = guard_line(r'ops\.remap_file_range\s*=', '4, 20, 0')
+          # 3) remap_file_range 整个函数加守卫(函数体内的 REMAP_FILE_DEDUP 一并解决)
+          def wrap_func(name, ver):
+              m = re.search(r'(?m)^static [^\n]*\b' + name + r'\s*\(', s)
+              assert m, name + ' not found'
+              b = s.index('{', m.end()); d = 0; k = b
+              while True:
+                  d += (s[k] == '{') - (s[k] == '}')
+                  if d == 0:
+                      break
+                  k += 1
+              e = s.index('\n', k) + 1
+              return (s[:m.start()]
+                      + '#if LINUX_VERSION_CODE >= KERNEL_VERSION(%s)\n' % ver
+                      + s[m.start():e] + '#endif\n' + s[e:])
+          s = wrap_func('ksu_wrapper_remap_file_range', '4, 20, 0')
+          open(p, 'w').write(s)
+          print('file_wrapper.c patched OK')
+          PYEOF
+
+
           
 
           echo "===== 并入 drivers/kernelsu ====="
