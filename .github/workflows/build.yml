@@ -73,7 +73,7 @@ jobs:
           echo "MAKECFG=${CFG#arch/arm64/configs/}" >> "$GITHUB_ENV"
 
           echo "===== FinaSU ====="
-          if ! git clone --depth=1 "https://github.com/$KSUREPO" KernelSU; then
+          if ! git clone --depth=1 --recurse-submodules "https://github.com/$KSUREPO" KernelSU; then
             echo "::error::克隆 https://github.com/$KSUREPO 失败，请检查参数 ksu_repo 填的 owner/repo"
             exit 1
           fi
@@ -144,7 +144,9 @@ jobs:
 
           echo "===== 并入 drivers/kernelsu ====="
           rm -rf drivers/kernelsu
-          cp -a KernelSU/kernel drivers/kernelsu
+          ln -sf ../../KernelSU/kernel drivers/kernelsu
+
+
           if ! grep -q 'kernelsu' drivers/Makefile; then
             echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           fi
