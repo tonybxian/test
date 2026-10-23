@@ -142,6 +142,16 @@ jobs:
             fi
           fi
 
+
+          echo "===== 4.19兼容:MODULE_IMPORT_NS ====="
+          grep -rl 'MODULE_IMPORT_NS(' KernelSU/kernel | while read -r f; do
+            # 跳过本来就定义了兼容宏的头文件，避免自引用
+            grep -q '#define MODULE_IMPORT_NS' "$f" && continue
+            sed -i 's|^\([[:space:]]*MODULE_IMPORT_NS([^)]*);[[:space:]]*\)$|#ifdef MODULE_IMPORT_NS\n\1\n#endif|' "$f"
+          done
+
+          
+
           echo "===== 并入 drivers/kernelsu ====="
           rm -rf drivers/kernelsu
           ln -sf ../KernelSU/kernel drivers/kernelsu
