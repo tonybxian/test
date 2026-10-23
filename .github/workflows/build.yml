@@ -6,7 +6,7 @@ on:
       kernel_branch:
         description: "LineageOS内核分支，必须与手机ROM一致"
         required: true
-        default: "lineage-22.2"
+        default: "lineage-24.0"
       defconfig:
         description: "defconfig名，留空自动查找apollo"
         required: false
@@ -20,7 +20,7 @@ permissions:
   contents: write
 
 env:
-  KBRANCH: ${{ github.event.inputs.kernel_branch || 'lineage-22.2' }}
+  KBRANCH: ${{ github.event.inputs.kernel_branch || 'lineage-24.0' }}
   DEFCFG: ${{ github.event.inputs.defconfig }}
   KSUREPO: ${{ github.event.inputs.ksu_repo || 'LyraVoid/FinaSU' }}
 
