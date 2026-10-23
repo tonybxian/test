@@ -20,7 +20,7 @@ permissions:
   contents: write
 
 env:
-  KBRANCH: ${{ github.event.inputs.kernel_branch || 'lineage-22.2' }}
+  KBRANCH: ${{ github.event.inputs.kernel_branch || 'lineage-24.0' }}
   DEFCFG: ${{ github.event.inputs.defconfig }}
   KSUBR: ${{ github.event.inputs.ksu_branch || 'main' }}
   KSU_REPO: "https://github.com/LyraVoid/FinaSU"
