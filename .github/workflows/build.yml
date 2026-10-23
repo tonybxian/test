@@ -144,7 +144,7 @@ jobs:
 
           echo "===== 并入 drivers/kernelsu ====="
           rm -rf drivers/kernelsu
-          ln -sf ../../KernelSU/kernel drivers/kernelsu
+          ln -sf ../KernelSU/kernel drivers/kernelsu
 
 
           if ! grep -q 'kernelsu' drivers/Makefile; then
