@@ -449,6 +449,210 @@ jobs:
           PYEOF
 
 
+          echo "===== 4.19兼容: sepolicy flex_array v1 ====="
+          python3 - <<'PYEOF'
+          import sys
+
+          p = 'KernelSU/kernel/selinux/sepolicy.c'
+          s = open(p).read()
+          MARK = '/* KSU-419-SEPOLICY */'
+          if MARK in s:
+              print('sepolicy.c already patched, skip')
+              sys.exit(0)
+
+          def find_def(src, prefix):
+              start = 0
+              while True:
+                  i = src.find(prefix, start)
+                  assert i != -1, 'function not found: ' + prefix
+                  j = src.find(';', i)
+                  k = src.find('{', i)
+                  if k != -1 and (j == -1 or k < j):
+                      return i
+                  start = i + 1
+
+          def brace_end(src, start):
+              k = src.index('{', start)
+              d = 0
+              while True:
+                  d += (src[k] == '{') - (src[k] == '}')
+                  if d == 0:
+                      return k
+                  k += 1
+
+          def wrap_fn(src, prefix, gate, stub, tag):
+              i = find_def(src, prefix)
+              k = brace_end(src, i)
+              e = src.index('\n', k) + 1
+              body = src[i:e]
+              return src[:i] + gate + '\n' + body + '#else\n' + stub + '\n#endif\n' + src[e:]
+
+          V1 = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)'
+          V9 = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)'
+          V6 = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)'
+
+          # 1) remove_avtab_node: 4.19 的 avtab.htable 是 flex_array, 守卫+stub
+          s = wrap_fn(s, 'static bool remove_avtab_node(', V1,
+              'static bool remove_avtab_node(struct policydb *db, struct avtab_node *node)\n'
+              '{\n'
+              '    (void)db;\n'
+              '    (void)node;\n'
+              '    return false;\n'
+              '}', 'remove_avtab_node')
+
+          # 2) add_filename_trans: 5.9 API, 守卫+stub
+          s = wrap_fn(s, 'static bool add_filename_trans(', V9,
+              'static bool add_filename_trans(struct policydb *db, const char *s, const char *t, const char *c, const char *d, const char *o)\n'
+              '{\n'
+              '    (void)db; (void)s; (void)t; (void)c; (void)d; (void)o;\n'
+              '    return false;\n'
+              '}', 'add_filename_trans')
+
+          # 3) add_type: 5.1+ 保留 FinaSU 实现; 4.19 用原版 KernelSU v0.9.5 的 flex_array 实现
+          A1 = ('    if (symtab_insert(&db->p_types, key, type)) {\n'
+                '        pr_err("add_type: insert symtab failed.\\n");\n'
+                '        return false;\n'
+                '    }\n')
+          n = s.count(A1)
+          assert n == 1, 'add_type anchor: hit %d, expect 1' % n
+          i = s.index(A1)
+          j = find_def(s, 'static bool add_type(')
+          k = brace_end(s, j)
+          assert i < k, 'add_type anchor outside body'
+          mid = s[i + len(A1):k]
+          R = '    return true;\n'
+          assert mid.endswith(R), 'add_type tail unexpected'
+          assert mid.count(R) == 1, 'add_type return true: %d' % mid.count(R)
+          head = mid[:-len(R)]
+          FA_BODY = (
+          '    // flex_array is not extensible, we need to create a new bigger one instead\n'
+          '    struct flex_array *new_type_attr_map_array =\n'
+          '        flex_array_alloc(sizeof(struct ebitmap), db->p_types.nprim,\n'
+          '                         GFP_ATOMIC | __GFP_ZERO);\n'
+          '    struct flex_array *new_type_val_to_struct =\n'
+          '        flex_array_alloc(sizeof(struct type_datum *), db->p_types.nprim,\n'
+          '                         GFP_ATOMIC | __GFP_ZERO);\n'
+          '    struct flex_array *new_val_to_name_types =\n'
+          '        flex_array_alloc(sizeof(char *), db->symtab[SYM_TYPES].nprim,\n'
+          '                         GFP_ATOMIC | __GFP_ZERO);\n'
+          '    if (!new_type_attr_map_array) {\n'
+          '        pr_err("add_type: alloc type_attr_map_array failed\\n");\n'
+          '        return false;\n'
+          '    }\n'
+          '    if (!new_type_val_to_struct) {\n'
+          '        pr_err("add_type: alloc type_val_to_struct failed\\n");\n'
+          '        return false;\n'
+          '    }\n'
+          '    if (!new_val_to_name_types) {\n'
+          '        pr_err("add_type: alloc val_to_name failed\\n");\n'
+          '        return false;\n'
+          '    }\n'
+          '    // preallocate so we don\'t have to worry about the put ever failing\n'
+          '    if (flex_array_prealloc(new_type_attr_map_array, 0, db->p_types.nprim,\n'
+          '                            GFP_ATOMIC | __GFP_ZERO)) {\n'
+          '        pr_err("add_type: prealloc type_attr_map_array failed\\n");\n'
+          '        return false;\n'
+          '    }\n'
+          '    if (flex_array_prealloc(new_type_val_to_struct, 0, db->p_types.nprim,\n'
+          '                            GFP_ATOMIC | __GFP_ZERO)) {\n'
+          '        pr_err("add_type: prealloc type_val_to_struct failed\\n");\n'
+          '        return false;\n'
+          '    }\n'
+          '    if (flex_array_prealloc(new_val_to_name_types, 0,\n'
+          '                            db->symtab[SYM_TYPES].nprim,\n'
+          '                            GFP_ATOMIC | __GFP_ZERO)) {\n'
+          '        pr_err("add_type: prealloc val_to_name_types failed\\n");\n'
+          '        return false;\n'
+          '    }\n'
+          '    int j;\n'
+          '    void *old_elem;\n'
+          '    // copy the old data or pointers to new flex arrays\n'
+          '    for (j = 0; j < db->type_attr_map_array->total_nr_elements; j++) {\n'
+          '        old_elem = flex_array_get(db->type_attr_map_array, j);\n'
+          '        if (old_elem)\n'
+          '            flex_array_put(new_type_attr_map_array, j, old_elem,\n'
+          '                           GFP_ATOMIC | __GFP_ZERO);\n'
+          '    }\n'
+          '    for (j = 0; j < db->type_val_to_struct_array->total_nr_elements; j++) {\n'
+          '        old_elem = flex_array_get_ptr(db->type_val_to_struct_array, j);\n'
+          '        if (old_elem)\n'
+          '            flex_array_put_ptr(new_type_val_to_struct, j, old_elem,\n'
+          '                               GFP_ATOMIC | __GFP_ZERO);\n'
+          '    }\n'
+          '    for (j = 0; j < db->symtab[SYM_TYPES].nprim; j++) {\n'
+          '        old_elem =\n'
+          '            flex_array_get_ptr(db->sym_val_to_name[SYM_TYPES], j);\n'
+          '        if (old_elem)\n'
+          '            flex_array_put_ptr(new_val_to_name_types, j, old_elem,\n'
+          '                               GFP_ATOMIC | __GFP_ZERO);\n'
+          '    }\n'
+          '    // store the pointer of old flex arrays, when assigning new ones we\n'
+          '    // should free it\n'
+          '    struct flex_array *old_fa;\n'
+          '    old_fa = db->type_attr_map_array;\n'
+          '    db->type_attr_map_array = new_type_attr_map_array;\n'
+          '    if (old_fa) {\n'
+          '        flex_array_free(old_fa);\n'
+          '    }\n'
+          '    ebitmap_init(flex_array_get(db->type_attr_map_array, value - 1));\n'
+          '    ebitmap_set_bit(flex_array_get(db->type_attr_map_array, value - 1),\n'
+          '                    value - 1, 1);\n'
+          '    old_fa = db->type_val_to_struct_array;\n'
+          '    db->type_val_to_struct_array = new_type_val_to_struct;\n'
+          '    if (old_fa) {\n'
+          '        flex_array_free(old_fa);\n'
+          '    }\n'
+          '    flex_array_put_ptr(db->type_val_to_struct_array, value - 1, type,\n'
+          '                       GFP_ATOMIC | __GFP_ZERO);\n'
+          '    old_fa = db->sym_val_to_name[SYM_TYPES];\n'
+          '    db->sym_val_to_name[SYM_TYPES] = new_val_to_name_types;\n'
+          '    if (old_fa) {\n'
+          '        flex_array_free(old_fa);\n'
+          '    }\n'
+          '    flex_array_put_ptr(db->sym_val_to_name[SYM_TYPES], value - 1, key,\n'
+          '                       GFP_ATOMIC | __GFP_ZERO);\n'
+          '    int i;\n'
+          '    for (i = 0; i < db->p_roles.nprim; ++i) {\n'
+          '        ebitmap_set_bit(&db->role_val_to_struct[i]->types, value - 1, 1);\n'
+          '    }\n')
+          s = (s[:i + len(A1)] + V1 + '\n' + head
+               + '#else\n' + FA_BODY + '#endif\n' + R + s[k:])
+
+          # 4) add_typeattribute_raw: sattr 行按版本分流
+          S1 = '    struct ebitmap *sattr = &db->type_attr_map_array[type->value - 1];\n'
+          n = s.count(S1)
+          assert n == 1, 'sattr: hit %d, expect 1' % n
+          s = s.replace(S1,
+              '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)\n' + S1
+            + '#else\n'
+            + '    struct ebitmap *sattr =\n'
+            + '        flex_array_get(db->type_attr_map_array, type->value - 1);\n'
+            + '#endif\n')
+
+          # 5) dup/destroy: 若之前 v3 的 sepolicy 部分没打上, 这里补上
+          if 'ksu_dup_sepolicy(struct selinux_policy *old_pol) { (void)old_pol; return NULL; }' not in s:
+              i = s.index('void ksu_destroy_sepolicy')
+              j = s.index('struct selinux_policy *ksu_dup_sepolicy')
+              assert i < j, 'dup/destroy order changed'
+              k = brace_end(s, j)
+              e = s.index('\n', k) + 1
+              block = s[i:e]
+              stubs = ('void ksu_destroy_sepolicy(struct selinux_policy *pol) { (void)pol; }\n'
+                       'struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol) { (void)old_pol; return NULL; }\n')
+              s = s[:i] + V6 + '\n' + block + '#else\n' + stubs + '#endif\n' + s[e:]
+              print('dup/destroy wrapped')
+          else:
+              print('dup/destroy already guarded')
+
+          inc = '#include "sepolicy.h"\n'
+          assert s.count(inc) == 1, 'include anchor: %d' % s.count(inc)
+          s = s.replace(inc, inc + MARK + '\n')
+          open(p, 'w').write(s)
+          print('sepolicy.c patched OK')
+          PYEOF
+
+
+
 
 
 
