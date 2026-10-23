@@ -227,7 +227,7 @@ jobs:
           PYEOF
 
 
-                    echo "===== 4.19兼容: pkg_observer ====="
+          echo "===== 4.19兼容: pkg_observer ====="
           python3 - <<'PYEOF'
           import re, sys
           p = 'KernelSU/kernel/manager/pkg_observer.c'
@@ -284,6 +284,34 @@ jobs:
           open(p, 'w').write(s)
           print('pkg_observer.c patched OK')
           PYEOF
+
+
+          echo "===== 4.19兼容: 全局扫TWA_RESUME ====="
+          python3 - <<'PYEOF'
+          import re, glob, sys
+          fixed = []
+          pat = re.compile(r'(?m)^(?P<i>[ \t]*)(?P<s>.*task_work_add\([^;]*TWA_RESUME[^;]*\).*)$')
+          for p in glob.glob('KernelSU/kernel/**/*.c', recursive=True):
+              s = open(p).read()
+              if 'TWA_RESUME' not in s or 'KERNEL_VERSION(5, 11, 0)' in s:
+                  continue
+              def repl(m):
+                  i, t = m.group('i'), m.group('s')
+                  return (i + '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)\n'
+                          + i + t + '\n'
+                          + i + '#else\n'
+                          + i + t.replace('TWA_RESUME', 'true') + '\n'
+                          + i + '#endif')
+              new_s, n = pat.subn(repl, s)
+              if n:
+                  if '#include <linux/version.h>' not in new_s:
+                      m2 = re.search(r'(?m)^#include', new_s)
+                      new_s = new_s[:m2.start()] + '#include <linux/version.h>\n' + new_s[m2.start():]
+                  open(p, 'w').write(new_s)
+                  fixed.append('%s (%d处)' % (p, n))
+          print('TWA_RESUME fixed:', fixed if fixed else 'no more occurrences')
+          PYEOF
+
 
           
 
