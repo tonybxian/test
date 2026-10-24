@@ -863,6 +863,56 @@ jobs:
           print('sepolicy.c v2 (KSU-Next port) patched OK')
           PYEOF
 
+
+          echo "===== 4.19兼容: sulog event.c (minmax/strncpy) ====="
+          python3 - <<'PYEOF'
+          import sys
+          p = 'KernelSU/kernel/sulog/event.c'
+          s = open(p).read()
+          MARK = '/* KSU-419-SULOG */'
+          if MARK in s:
+              print('sulog/event.c already patched, skip')
+              sys.exit(0)
+
+          OLD_INC = '#include <linux/minmax.h>'
+          assert s.count(OLD_INC) == 1, 'minmax include: hit %d, expect 1' % s.count(OLD_INC)
+          NEW_INC = '\n'.join([
+          '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)',
+          '#include <linux/minmax.h>',
+          '#else',
+          '#include <linux/kernel.h>',
+          '#endif',
+          ])
+          s = s.replace(OLD_INC, NEW_INC)
+
+          OLD_CALL = 'strncpy_from_user_nofault('
+          n = s.count(OLD_CALL)
+          assert n == 2, 'strncpy call sites: hit %d, expect 2' % n
+          s = s.replace(OLD_CALL, 'ksu_strncpy_from_user_nofault(')
+
+          SHIM = '\n'.join([
+          '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)',
+          '#define ksu_strncpy_from_user_nofault(dst, src, len) \\',
+          '    strncpy_from_user_nofault(dst, src, len)',
+          '#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)',
+          '#define ksu_strncpy_from_user_nofault(dst, src, len) \\',
+          '    strncpy_from_unsafe_user(dst, src, len)',
+          '#else',
+          '/* < 5.6 has no nofault variant; callers run in process context,',
+          '   sleeping is OK, error semantics are identical (<= 0 on fault) */',
+          '#define ksu_strncpy_from_user_nofault(dst, src, len) \\',
+          '    strncpy_from_user(dst, src, len)',
+          '#endif',
+          ])
+
+          ANCHOR = 'struct user_arg_ptr {'
+          assert s.count(ANCHOR) == 1, 'anchor: hit %d, expect 1' % s.count(ANCHOR)
+          s = s.replace(ANCHOR, MARK + '\n' + SHIM + '\n\n' + ANCHOR)
+
+          open(p, 'w').write(s)
+          print('sulog/event.c patched OK')
+          PYEOF
+
           
 
           
