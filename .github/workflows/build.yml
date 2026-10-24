@@ -1484,6 +1484,9 @@ jobs:
 
           if [ ! -f "$GITHUB_WORKSPACE/hooks.py" ]; then
           echo "::notice::仓库无hooks.py, 走kprobes钩子模式"
+
+          echo "HOOKS_FAILED=1" >> "$GITHUB_ENV"
+
           else
 
 
