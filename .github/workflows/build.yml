@@ -432,6 +432,8 @@ jobs:
                   print('::warning::namei.c may_create锚点未匹配, 跳过(仅损失SUS_PATH创建路径隐藏, 不影响编译)')
           else:
               print('namei.c: already patched, skip')
+          PYEOF
+
 
 
 
