@@ -913,6 +913,102 @@ jobs:
           print('sulog/event.c patched OK')
           PYEOF
 
+
+          echo "===== 4.19兼容: 终审补丁 (event/selinux_hide/netisolate) ====="
+          python3 - <<'PYEOF'
+          import sys
+
+          p1 = 'KernelSU/kernel/sulog/event.c'
+          s = open(p1).read()
+          if 'KSU-419-SULOG-V2' not in s:
+              anchor = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)\n#include <linux/minmax.h>'
+              assert s.count(anchor) == 1, 'event guard: %d' % s.count(anchor)
+              s = s.replace(anchor, '#include <linux/version.h>\n' + anchor)
+              m = '/* KSU-419-SULOG */'
+              assert s.count(m) == 1, 'sulog v1 marker missing'
+              s = s.replace(m, m + '\n/* KSU-419-SULOG-V2 */')
+              open(p1, 'w').write(s)
+              print('event.c: version.h added OK')
+          else:
+              print('event.c v2 already patched, skip')
+
+          p2 = 'KernelSU/kernel/feature/selinux_hide.c'
+          s2 = open(p2).read()
+          if 'KSU-419-SEHIDE' not in s2:
+              pre = '\n'.join([
+              '#include <linux/version.h>',
+              '/* KSU-419-SEHIDE */',
+              '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)',
+              '',
+              ]) + '\n'
+              post = '\n'.join([
+              '#else',
+              '/* < 5.6: struct selinux_policy / status_page / avc_has_perm(state)',
+              '   are unavailable; the whole hide feature is disabled. */',
+              'void ksu_selinux_hide_init(void) {}',
+              'void ksu_selinux_hide_exit(void) {}',
+              'void ksu_selinux_hide_drop_backup_if_unused(void) {}',
+              'void ksu_selinux_hide_handle_second_stage(void) {}',
+              'void ksu_selinux_hide_handle_post_fs_data(void) {}',
+              '#endif',
+              ]) + '\n'
+              s2 = pre + s2 + post
+              assert s2.count('#if') == s2.count('#endif'), 'preprocessor imbalance'
+              open(p2, 'w').write(s2)
+              print('selinux_hide.c: gated to stubs OK')
+          else:
+              print('selinux_hide.c already patched, skip')
+
+          p3 = 'KernelSU/kernel/supercall/dispatch.c'
+          s3 = open(p3).read()
+          if 'KSU-419-NI-STUB' not in s3:
+              anchor = '#include "preinit/preinit.h"'
+              assert s3.count(anchor) == 1, 'dispatch anchor: %d' % s3.count(anchor)
+              stub = '\n'.join([
+              anchor,
+              '',
+              '/* KSU-419-NI-STUB: feature/netisolate.c is NOT listed in Kbuild (upstream',
+              '   omission) while this file calls its functions unconditionally; provide',
+              '   stubs so linking succeeds. Net-isolate commands report -EOPNOTSUPP. */',
+              'int __init ksu_netisolate_init(void) { return 0; }',
+              'void ksu_netisolate_exit(void) {}',
+              'int ksu_netisolate_get_config(struct ksu_netisolate_config *config)',
+              '{',
+              '    (void)config;',
+              '    return -EOPNOTSUPP;',
+              '}',
+              'int ksu_netisolate_set_config(const struct ksu_netisolate_config *config)',
+              '{',
+              '    (void)config;',
+              '    return -EOPNOTSUPP;',
+              '}',
+              'int ksu_netisolate_get_policies(struct ksu_netisolate_policies *config)',
+              '{',
+              '    (void)config;',
+              '    return -EOPNOTSUPP;',
+              '}',
+              'int ksu_netisolate_set_policies(const struct ksu_netisolate_policies *config)',
+              '{',
+              '    (void)config;',
+              '    return -EOPNOTSUPP;',
+              '}',
+              'int ksu_netisolate_get_events(struct ksu_netisolate_events *events)',
+              '{',
+              '    (void)events;',
+              '    return -EOPNOTSUPP;',
+              '}',
+              'int ksu_netisolate_clear_events(void)',
+              '{',
+              '    return -EOPNOTSUPP;',
+              '}',
+              ]) + '\n'
+              s3 = s3.replace(anchor, stub)
+              open(p3, 'w').write(s3)
+              print('dispatch.c: netisolate stubs added OK')
+          else:
+              print('dispatch.c already patched, skip')
+          PYEOF
+
           
 
           
