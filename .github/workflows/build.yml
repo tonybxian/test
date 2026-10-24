@@ -451,6 +451,29 @@ jobs:
           echo "defconfig updated"
 
 
+          echo "===== 4.19兼容: compat修正v2 ====="
+          printf '%s\n' '// KSU-419-COMPAT: linkable symbols for 4.19 (FinaSU extern decls)' > KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '#include <linux/version.h>' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '#include <linux/atomic.h>' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '#define put_task_struct ksu_compat_suppress_header_inline' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '#include <linux/sched/task.h>' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '#undef put_task_struct' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' 'void put_task_struct(struct task_struct *t)' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '{' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '    if (atomic_dec_and_test(&t->usage))' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '        __put_task_struct(t);' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '}' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '#endif' >> KernelSU/kernel/ksu_compat_419.c
+          printf '%s\n' '__weak void seccomp_filter_release(struct task_struct *tsk) { (void)tsk; }' >> KernelSU/kernel/ksu_compat_419.c
+          grep -q 'ksu_compat_419.o' KernelSU/kernel/Makefile || printf '\nobj-y += ksu_compat_419.o\n' >> KernelSU/kernel/Makefile
+          grep -q 'put_task_struct' KernelSU/kernel/ksu_compat_419.c && echo "compat file OK" || echo "::warning::compat file incomplete"
+          printf '%s\n' '' '/* KSU-419-PATHMOUNT: 5.9+ API; FinaSU calls with MS_PRIVATE|MS_REC only */' '#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)' 'int path_mount(const char *dev_name, struct path *path, const char *type_page, unsigned long flags, void *data_page)' >> fs/namespace.c
+          printf '%s\n' '{' '    if (flags & (MS_SHARED | MS_PRIVATE | MS_SLAVE | MS_UNBINDABLE))' '        return do_change_type(path, flags);' '    return -EINVAL;' '}' '#endif' >> fs/namespace.c
+          echo "path_mount shim done"
+
+
+
 
 
           echo "===== 4.19兼容:MODULE_IMPORT_NS ====="
