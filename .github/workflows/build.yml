@@ -153,6 +153,26 @@ jobs:
           fi
 
 
+          echo "---- fs/Makefile: 确保 susfs.o sus_su.o 参与编译 ----"
+          if [ -f fs/susfs.c ] && ! grep -q 'susfs\.o' fs/Makefile; then
+          printf 'obj-$(CONFIG_KSU_SUSFS) += susfs.o sus_su.o\n' >> fs/Makefile
+          echo "已追加 susfs.o sus_su.o 到 fs/Makefile"
+          else
+          echo "fs/Makefile 已含 susfs.o 或无susfs, 跳过"
+          fi
+          echo "---- 缺失标识符出处诊断 ----"
+          for sym in DEFAULT_SUS_MNT_ID DEFAULT_SUS_MNT_GROUP_ID DEFAULT_SUS_MNT_ID_FOR_KSU_PROC_UNSHARE CL_COPY_MNT_NS susfs_mnt_id_ida susfs_mnt_group_ida; do
+          HITS=$(grep -rn "$sym" include/linux/susfs.h include/linux/susfs_def.h include/linux/mount.h fs/susfs.c fs/sus_su.c 2>/dev/null | head -8)
+          if [ -n "$HITS" ]; then
+          echo "[$sym]"
+          echo "$HITS"
+          else
+          echo "[$sym] (susfs源中未见)"
+          fi
+          done
+
+
+
           echo "---- susfs 头文件诊断 v2 ----"
           ls include/linux/susfs*.h 2>/dev/null || echo "(无 susfs 头文件)"
           for f in include/linux/susfs.h include/linux/susfs_def.h; do
