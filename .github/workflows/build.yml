@@ -272,6 +272,169 @@ jobs:
           grep -rn 'define INODE_STATE_SUS' include/linux/ 2>/dev/null || echo "(头文件中无定义)"
 
 
+          echo "===== 4.19兼容: susfs 被拒hunk精确手补 ====="
+          python3 - <<'PYEOF'
+          import re, sys
+
+          # ---------- 1. include/linux/mount.h ----------
+          p = 'include/linux/mount.h'
+          s = open(p).read()
+          if 'susfs_mnt_id_backup' not in s:
+              i = s.index('struct vfsmount {')
+              k = s.index('{', i); d = 0
+              while True:
+                  d += (s[k] == '{') - (s[k] == '}')
+                  if d == 0: break
+                  k += 1
+              s = s[:k] + '#ifdef CONFIG_KSU_SUSFS\n\tu64 susfs_mnt_id_backup;\n#endif\n' + s[k:]
+              open(p, 'w').write(s)
+              print('mount.h: susfs_mnt_id_backup member added')
+          else:
+              print('mount.h: member already present, skip')
+
+          # ---------- 2. include/linux/sched.h 保险 ----------
+          p = 'include/linux/sched.h'
+          s = open(p).read()
+          need = []
+          if 'susfs_last_fake_mnt_id' not in s:
+              need.append('u32 susfs_last_fake_mnt_id;')
+          if 'susfs_task_state' not in s:
+              need.append('u32 susfs_task_state;')
+          if need:
+              i = s.index('struct task_struct {')
+              k = s.index('{', i); d = 0
+              while True:
+                  d += (s[k] == '{') - (s[k] == '}')
+                  if d == 0: break
+                  k += 1
+              s = s[:k] + '#ifdef CONFIG_KSU_SUSFS\n\t' + '\n\t'.join(need) + '\n#endif\n' + s[k:]
+              open(p, 'w').write(s)
+              print('sched.h: susfs task fields added')
+          else:
+              print('sched.h: susfs fields already present')
+
+          # ---------- 3. fs/namespace.c ----------
+          p = 'fs/namespace.c'
+          s = open(p).read()
+          changed = False
+          MARK = '/* KSU-419-SUSFS-MNT */'
+          if MARK not in s:
+              inc = ('#if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)\n'
+                     '#include <linux/susfs_def.h>\n'
+                     '#endif\n')
+              m = re.search(r'(?m)^#include <linux/sched/task\.h>\n', s)
+              if not m:
+                  sys.exit('namespace.c: sched/task.h anchor not found')
+              s = s[:m.end()] + inc + s[m.end():]
+              blk = (
+                  '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+                  'extern bool susfs_is_current_ksu_domain(void);\n'
+                  'extern bool susfs_is_current_zygote_domain(void);\n'
+                  '\n'
+                  'static DEFINE_IDA(susfs_mnt_id_ida);\n'
+                  'static DEFINE_IDA(susfs_mnt_group_ida);\n'
+                  '\n'
+                  '#define CL_ZYGOTE_COPY_MNT_NS BIT(24) /* used by copy_mnt_ns() */\n'
+                  '#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n'
+                  '#endif\n'
+                  '\n'
+                  '#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT\n'
+                  'extern void susfs_auto_add_sus_ksu_default_mount(const char __user *to_pathname);\n'
+                  'bool susfs_is_auto_add_sus_ksu_default_mount_enabled = true;\n'
+                  '#endif\n'
+                  '#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT\n'
+                  'extern int susfs_auto_add_sus_bind_mount(const char *pathname, struct path *path_target);\n'
+                  'bool susfs_is_auto_add_sus_bind_mount_enabled = true;\n'
+                  '#endif\n'
+                  '#ifdef CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT\n'
+                  'extern void susfs_auto_add_try_umount_for_bind_mount(struct path *path);\n'
+                  'bool susfs_is_auto_add_try_umount_for_bind_mount_enabled = true;\n'
+                  '#endif\n'
+                  '\n')
+              anchor = '/* Maximum number of mounts in a mount namespace */'
+              if anchor not in s:
+                  sys.exit('namespace.c: sysctl anchor not found')
+              s = s.replace(anchor, MARK + '\n' + blk + anchor, 1)
+              changed = True
+              print('namespace.c: include+IDA+CL block added')
+          if 'bypass_orig_flow' not in s:
+              def wrap(m):
+                  ind, args = m.group(1), m.group(2).strip()
+                  if args.endswith(', 0'):
+                      return m.group(0)
+                  return (ind + '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+                        + ind + '\t// For newly created mounts, the only caller process we care is KSU\n'
+                        + ind + '\tif (unlikely(susfs_is_current_ksu_domain())) {\n'
+                        + ind + '\t\tmnt = alloc_vfsmnt(' + args + ', true, 0);\n'
+                        + ind + '\t\tgoto bypass_orig_flow;\n'
+                        + ind + '\t}\n'
+                        + ind + '\tmnt = alloc_vfsmnt(' + args + ', false, 0);\n'
+                        + ind + '\tbypass_orig_flow:\n'
+                        + ind + '#else\n'
+                        + ind + '\tmnt = alloc_vfsmnt(' + args + ');\n'
+                        + ind + '#endif\n')
+              s, n = re.subn(r'(?m)^([ \t]*)mnt = alloc_vfsmnt\(([^;]+)\);[ \t]*$', wrap, s)
+              if n == 0:
+                  sys.exit('namespace.c: alloc_vfsmnt call site not found')
+              changed = True
+              print('namespace.c: alloc_vfsmnt call sites wrapped:', n)
+          if 'susfs_last_fake_mnt_id++' not in s:
+              sites = list(re.finditer(r'(?m)^([ \t]*)mnt->mnt_parent\s*=\s*mnt;[ \t]*$', s))
+              tgt = None
+              for mm in sites:
+                  if 'mnt_mountpoint' in s[max(0, mm.start() - 300):mm.start()]:
+                      tgt = mm
+                      break
+              if tgt is None and sites:
+                  tgt = sites[0]
+              if tgt is None:
+                  sys.exit('namespace.c: mnt->mnt_parent anchor not found')
+              ind = tgt.group(1)
+              ro = (ind + '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
+                  + ind + '\t// If caller process is zygote, then it is a normal mount, so we just reorder the mnt_id\n'
+                  + ind + '\tif (susfs_is_current_zygote_domain()) {\n'
+                  + ind + '\t\tmnt->mnt.susfs_mnt_id_backup = mnt->mnt_id;\n'
+                  + ind + '\t\tmnt->mnt_id = current->susfs_last_fake_mnt_id++;\n'
+                  + ind + '\t}\n'
+                  + ind + '#endif\n')
+              s = s[:tgt.end()] + '\n' + ro + s[tgt.end():]
+              changed = True
+              print('namespace.c: zygote mnt_id reorder added')
+          if changed:
+              open(p, 'w').write(s)
+
+          # ---------- 4. fs/namei.c may_create ----------
+          p = 'fs/namei.c'
+          s = open(p).read()
+          if 'KSU-419-SUSFS-MAYCREATE' not in s:
+              m = re.search(r'(?m)^static inline int may_create\(struct inode \*dir, struct dentry \*child\)\n\{\n', s)
+              if not m:
+                  sys.exit('namei.c: may_create anchor not found')
+              s = s[:m.end()] + '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tint error;\n#endif\n' + s[m.end():]
+              a = re.search(r'(?m)^([ \t]*)audit_inode_child\(dir, child, AUDIT_TYPE_CHILD_CREATE\);[ \t]*\n', s)
+              if not a:
+                  sys.exit('namei.c: audit anchor not found')
+              ind = a.group(1)
+              lines = [
+                  ind + '#ifdef CONFIG_KSU_SUSFS_SUS_PATH',
+                  ind + '\tif (child->d_inode && unlikely(child->d_inode->i_state & INODE_STATE_SUS_PATH) && likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {',
+                  ind + '\t\terror = inode_permission(dir, MAY_WRITE | MAY_EXEC);',
+                  ind + '\t\tif (error) {',
+                  ind + '\t\t\treturn error;',
+                  ind + '\t\t}',
+                  ind + '\t\treturn -ENOENT;',
+                  ind + '\t}',
+                  ind + '#endif',
+                  ind + '/* KSU-419-SUSFS-MAYCREATE */',
+              ]
+              s = s[:a.end()] + '\n'.join(lines) + '\n' + s[a.end():]
+              open(p, 'w').write(s)
+              print('namei.c: may_create SUS_PATH check added')
+          else:
+              print('namei.c: already patched, skip')
+          PYEOF
+
+
  
 
 
