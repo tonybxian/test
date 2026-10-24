@@ -105,6 +105,7 @@ jobs:
               echo "⚠️ susfs补丁部分应用: $NREJ 个hunk被拒, 详情:"
               head -60 .susfs_apply_err || true
               find . -name '*.rej' | head -15
+              for r in $(find . -name '*.rej'); do echo "===== $r ====="; head -n 200 "$r"; done
               find . -name '*.rej' -delete
               else
               echo "::warning::susfs 4.19补丁完全不匹配, 隐藏能力可能不完整"
