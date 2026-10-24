@@ -437,6 +437,19 @@ jobs:
           PYEOF
 
 
+          echo "===== 4.19兼容: 链接期符号兜底 v3 ====="
+          grep -q 'KSU-419-SUSFS-STUB' fs/susfs.c || printf '%s\n' '' '/* KSU-419-SUSFS-STUB: weak fallbacks for KSU-side externs absent here */' '#include <linux/workqueue.h>' 'static void susfs_extra_works_handler(struct work_struct *w) { (void)w; }' 'DECLARE_WORK(susfs_extra_works, susfs_extra_works_handler);' '' '__weak void susfs_set_current_proc_no_su(void) { }' '__weak void susfs_set_current_proc_umounted(void) { }' '__weak void susfs_set_current_proc_umounted_for_zygote_next(void) { }' '__weak bool susfs_is_current_proc_no_su(void) { return false; }' '__weak void susfs_start_sdcard_monitor_fn(void) { }' '__weak void susfs_enable_log(void __user *arg) { (void)arg; }' '__weak void susfs_get_enabled_features(void __user *arg) { (void)arg; }' '__weak void susfs_show_variant(void __user *arg) { (void)arg; }' '__weak void susfs_show_version(void __user *arg) { (void)arg; }' >> fs/susfs.c
+          echo "susfs.c weak stubs done"
+          grep -q 'KSU-419-UMOUNT' fs/namespace.c || printf '%s\n' '' '#include <linux/version.h>' '/* KSU-419-UMOUNT: path_umount backport for kernels < 5.11, per kernelsu.org non-GKI guide */' '#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)' 'int path_umount(struct path *path, int flags)' '{' '    struct mount *mnt = real_mount(path->mnt);' '    if (!may_mount())' '        return -EPERM;' '    if (path->dentry != path->mnt->mnt_root)' '        return -EINVAL;' '    if (!check_mnt(mnt))' '        return -EINVAL;' '    if (mnt->mnt.mnt_flags & MNT_LOCKED)' '        return -EINVAL;' '    if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))' '        return -EPERM;' '    return do_umount(mnt, flags);' '}' '#endif' >> fs/namespace.c
+          echo "path_umount backport done"
+          printf '%s\n' '// KSU-419-COMPAT: linkable symbols for 4.19 referenced via KSU extern decls' '#include <linux/version.h>' '#include <linux/atomic.h>' '#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)' '#define put_task_struct ksu_compat_suppress_header_inline' '#include <linux/sched/task.h>' '#undef put_task_struct' 'void put_task_struct(struct task_struct *t)' '{' '    if (atomic_dec_and_test(&t->usage))' '        __put_task_struct(t);' '}' '#endif' '' '#include <linux/sched.h>' '#include <linux/seccomp.h>' '__weak void seccomp_filter_release(struct task_struct *tsk) { (void)tsk; }' '' '#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)' 'extern long do_mount(const char *dev_name, struct path *path,' '                     const char *type_page, unsigned long flags, void *data_page);' 'int path_mount(const char *dev_name, struct path *path,' '               const char *type_page, unsigned long flags, void *data_page)' '{' '    return (int)do_mount(dev_name, path, type_page, flags, data_page);' '}' '#endif' > KernelSU/kernel/ksu_compat_419.c
+          grep -q 'ksu_compat_419.o' KernelSU/kernel/Makefile || printf 'obj-y += ksu_compat_419.o\n' >> KernelSU/kernel/Makefile
+          echo "ksu_compat_419.c written"
+          for opt in CONFIG_KSU_SUSFS_SUS_PATH CONFIG_KSU_SUSFS_SUS_MOUNT CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT CONFIG_KSU_SUSFS_ENABLE_LOG CONFIG_KSU_SUSFS_SUS_KSTAT CONFIG_KSU_SUSFS_SPOOF_UNAME CONFIG_KSU_SUSFS_OPEN_REDIRECT CONFIG_USB_PD_POLICY CONFIG_QPNP_USB_PDPHY CONFIG_PS5169; do
+          grep -q "^$opt=y" "$CFG" || echo "$opt=y" >> "$CFG"
+          done
+          echo "defconfig updated"
+
 
 
 
