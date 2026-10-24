@@ -156,8 +156,9 @@ jobs:
 
           echo "---- fs/Makefile: 确保 susfs.o sus_su.o 参与编译 ----"
           if [ -f fs/susfs.c ] && ! grep -q 'susfs\.o' fs/Makefile; then
-          printf 'obj-$(CONFIG_KSU_SUSFS) += susfs.o sus_su.o\n' >> fs/Makefile
-          echo "已追加 susfs.o sus_su.o 到 fs/Makefile"
+          printf 'obj-$(CONFIG_KSU_SUSFS) += susfs.o\n' >> fs/Makefile
+
+          echo "已追加 susfs.o 到 fs/Makefile"
           else
           echo "fs/Makefile 已含 susfs.o 或无susfs, 跳过"
           fi
