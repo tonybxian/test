@@ -1504,7 +1504,7 @@ jobs:
           printf '\n# --- KSU/SUSFS/NoMount ---\nCONFIG_KSU=y\nCONFIG_KSU_SUSFS=y\n# CONFIG_KPROBES is not set\n' >> "$CFG"
 
 
-          cho "---- 压缩方式: 强制GZIP ----"
+          echo "---- 压缩方式: 强制GZIP ----"
           sed -i '/^CONFIG_KERNEL_/d' "$CFG"
           sed -i '/^# CONFIG_KERNEL_.*is not set/d' "$CFG"
           printf 'CONFIG_KERNEL_GZIP=y\n' >> "$CFG"
