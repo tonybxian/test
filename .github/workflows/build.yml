@@ -410,7 +410,7 @@ jobs:
           s = open(p).read()
           if 'KSU-419-SUSFS-MAYCREATE' not in s:
               m = re.search(r'(?s)static inline int may_create\([^)]*\)\s*\{\s*\n', s)
-              a = re.search(r'(?m)^([ \t]*)audit_inode_child\(dir, child, AUDIT_TYPE_CHILD_CREATE\);[ \t]*\n', s)
+              a = re.search(r'(?m)^([ \t]*)audit_inode_child\([^)]*AUDIT_TYPE_CHILD_CREATE\);[ \t]*\n', s)
               if m and a:
                   s = s[:m.end()] + '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tint error;\n#endif\n' + s[m.end():]
                   a = re.search(r'(?m)^([ \t]*)audit_inode_child\(dir, child, AUDIT_TYPE_CHILD_CREATE\);[ \t]*\n', s)
