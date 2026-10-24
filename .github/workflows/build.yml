@@ -473,6 +473,15 @@ jobs:
           echo "path_mount shim done"
 
 
+          echo "===== 4.19兼容: compat修正v3 ====="
+          printf '%s\n' '/* KSU-419-COMPAT: superseded — symbols now live in fs/namespace.c (this repo builds via kernel/Kbuild kernelsu-objs, so Makefile obj-y was dead). */' > KernelSU/kernel/ksu_compat_419.c
+          sed -i 's/\bput_task_struct\b/ksu_compat_put_task_struct/g' KernelSU/kernel/manager/dynamic_manager.c KernelSU/kernel/policy/allowlist.c || echo "::warning::put_task_struct sed failed"
+          sed -i 's/\bseccomp_filter_release\b/ksu_compat_seccomp_filter_release/g' KernelSU/kernel/policy/app_profile.c || echo "::warning::seccomp sed failed"
+          grep -q 'KSU-419-COMPAT-FS' fs/namespace.c || printf '%s\n' '' '/* KSU-419-COMPAT-FS: linkable impls for KSU-side externs on 4.19. */' '#include <linux/atomic.h>' 'void ksu_compat_put_task_struct(struct task_struct *t)' '{' '    if (atomic_dec_and_test(&t->usage))' '        __put_task_struct(t);' >> fs/namespace.c
+          grep -q 'ksu_compat_seccomp_filter_release' fs/namespace.c || printf '%s\n' '}' '__weak void ksu_compat_seccomp_filter_release(struct task_struct *tsk) { (void)tsk; }' >> fs/namespace.c
+          echo "compat v3 done"
+
+
 
 
 
