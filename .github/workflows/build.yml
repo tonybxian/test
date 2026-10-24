@@ -1299,6 +1299,9 @@ jobs:
               '    return -EOPNOTSUPP;',
               '}',
               ]) + '\n'
+              stub = stub.replace('int __init ksu_netisolate_init', '__weak int __init ksu_netisolate_init')
+              stub = stub.replace('void ksu_netisolate_exit', '__weak void ksu_netisolate_exit')
+              stub = stub.replace('int ksu_netisolate_', '__weak int ksu_netisolate_')
               s3 = s3.replace(anchor, stub)
               open(p3, 'w').write(s3)
               print('dispatch.c: netisolate stubs added OK')
