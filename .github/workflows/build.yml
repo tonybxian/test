@@ -141,9 +141,12 @@ jobs:
           fi
 
 
-          echo "---- susfs.h 落地版本诊断 ----"
-          grep -m1 'SUSFS_VERSION' include/linux/susfs.h 2>/dev/null || echo "❌ include/linux/susfs.h 不存在"
-          grep -c 'CMD_SUSFS' include/linux/susfs.h 2>/dev/null || true
+          echo "---- susfs_def.h 命令诊断 ----"
+          D=include/linux/susfs_def.h
+          grep -m1 'SUSFS_VERSION' $D 2>/dev/null
+          for c in SUSFS_MAGIC CMD_SUSFS_ADD_SUS_PATH_LOOP CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS CMD_SUSFS_ADD_SUS_MAP CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING CMD_SUSFS_ADD_SUS_PATH; do
+            grep -q "$c" $D 2>/dev/null && echo "✅ $c" || echo "❌ $c"
+          done
 
 
 
