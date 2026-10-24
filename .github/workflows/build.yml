@@ -1502,6 +1502,16 @@ jobs:
           echo "===== defconfig ====="
           grep -vE '^(CONFIG_KSU|# CONFIG_KSU|CONFIG_KPROBES|# CONFIG_KPROBES)' "$CFG" > "$CFG.new" && mv "$CFG.new" "$CFG"
           printf '\n# --- KSU/SUSFS/NoMount ---\nCONFIG_KSU=y\nCONFIG_KSU_SUSFS=y\n# CONFIG_KPROBES is not set\n' >> "$CFG"
+
+
+          cho "---- 压缩方式: 强制GZIP ----"
+          sed -i '/^CONFIG_KERNEL_/d' "$CFG"
+          sed -i '/^# CONFIG_KERNEL_.*is not set/d' "$CFG"
+          printf 'CONFIG_KERNEL_GZIP=y\n' >> "$CFG"
+          grep -q '^CONFIG_KERNEL_GZIP=y' "$CFG" && echo "✅ KERNEL_GZIP=y 已写入" || echo "::error::GZIP写入失败"
+
+
+          
           echo "✅ 集成完成"
 
       - name: 4.编译
@@ -1570,6 +1580,32 @@ jobs:
           if [ "$KIMG" = "Image" ]; then
           echo "::error::只构建出raw Image(无gzip), 异常, abort"; exit 1
           fi
+
+          echo "---- dtb拼接前置: 多dtb集合 ----"
+          if [ "$KIMG" = "Image.gz" ]; then
+          mkdir -p kdtbs
+          for d in $(find ../out/arch/arm64/boot/dts -name '*.dtb' | grep -iE 'apollo|k30s' | sort); do cp "$d" kdtbs/; done
+          if [ -z "$(ls kdtbs 2>/dev/null)" ]; then
+          echo "::error::未找到apollo/k30s dtb, 全部dtb如下:"
+          find ../out/arch/arm64/boot/dts -name '*.dtb' | head -40
+          exit 1
+          fi
+          echo "拼接以下dtb:"; ls kdtbs/
+          cat ../out/arch/arm64/boot/Image.gz kdtbs/*.dtb > Image.gz-dtb
+          rm -rf kdtbs
+          KIMG="Image.gz-dtb"
+          echo "已生成多dtb集合 Image.gz-dtb"
+          fi
+          if [ "$KIMG" = "Image.lz4" ]; then
+          echo "::warning::LZ4形态, 拼接dtb兜底"
+          mkdir -p kdtbs
+          for d in $(find ../out/arch/arm64/boot/dts -name '*.dtb' | grep -iE 'apollo|k30s' | sort); do cp "$d" kdtbs/; done
+          if [ -z "$(ls kdtbs 2>/dev/null)" ]; then echo "::error::无apollo dtb"; exit 1; fi
+          cat ../out/arch/arm64/boot/Image.lz4 kdtbs/*.dtb > Image.lz4-dtb
+          rm -rf kdtbs
+          KIMG="Image.lz4-dtb"
+          fi
+
 
           echo "内核镜像: $KIMG"
           zip -r9 ../apollo_finasu_susfs_nomount.zip . >/dev/null
