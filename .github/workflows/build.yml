@@ -362,7 +362,7 @@ jobs:
 
               def wrap(m):
                   ind, args = m.group(1), m.group(2).strip()
-                  if args.endswith(', 0'):
+                  if ',' in args:
                       return m.group(0)
                   return (ind + '#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n'
                         + ind + '\t// For newly created mounts, the only caller process we care is KSU\n'
