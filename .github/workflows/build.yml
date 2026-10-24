@@ -403,39 +403,36 @@ jobs:
           if changed:
               open(p, 'w').write(s)
 
-          # ---------- 4. fs/namei.c may_create ----------
+          # ---------- 4. fs/namei.c may_create (非致命, 失败仅警告) ----------
           p = 'fs/namei.c'
           s = open(p).read()
           if 'KSU-419-SUSFS-MAYCREATE' not in s:
-              m = re.search(r'(?m)^static inline int may_create\(struct inode \*dir, struct dentry \*child\)\n\{\n', s)
-              if not m:
-                  sys.exit('namei.c: may_create anchor not found')
-              s = s[:m.end()] + '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tint error;\n#endif\n' + s[m.end():]
+              m = re.search(r'(?s)static inline int may_create\(struct inode \*dir, struct dentry \*child\)\s*\{\s*\n', s)
               a = re.search(r'(?m)^([ \t]*)audit_inode_child\(dir, child, AUDIT_TYPE_CHILD_CREATE\);[ \t]*\n', s)
-              if not a:
-                  sys.exit('namei.c: audit anchor not found')
-              ind = a.group(1)
-              lines = [
-                  ind + '#ifdef CONFIG_KSU_SUSFS_SUS_PATH',
-                  ind + '\tif (child->d_inode && unlikely(child->d_inode->i_state & INODE_STATE_SUS_PATH) && likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {',
-                  ind + '\t\terror = inode_permission(dir, MAY_WRITE | MAY_EXEC);',
-                  ind + '\t\tif (error) {',
-                  ind + '\t\t\treturn error;',
-                  ind + '\t\t}',
-                  ind + '\t\treturn -ENOENT;',
-                  ind + '\t}',
-                  ind + '#endif',
-                  ind + '/* KSU-419-SUSFS-MAYCREATE */',
-              ]
-              s = s[:a.end()] + '\n'.join(lines) + '\n' + s[a.end():]
-              open(p, 'w').write(s)
-              print('namei.c: may_create SUS_PATH check added')
+              if m and a:
+                  s = s[:m.end()] + '#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\tint error;\n#endif\n' + s[m.end():]
+                  a = re.search(r'(?m)^([ \t]*)audit_inode_child\(dir, child, AUDIT_TYPE_CHILD_CREATE\);[ \t]*\n', s)
+                  ind = a.group(1)
+                  lines = [
+                      ind + '#ifdef CONFIG_KSU_SUSFS_SUS_PATH',
+                      ind + '\tif (child->d_inode && unlikely(child->d_inode->i_state & INODE_STATE_SUS_PATH) && likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {',
+                      ind + '\t\terror = inode_permission(dir, MAY_WRITE | MAY_EXEC);',
+                      ind + '\t\tif (error) {',
+                      ind + '\t\t\treturn error;',
+                      ind + '\t\t}',
+                      ind + '\t\treturn -ENOENT;',
+                      ind + '\t}',
+                      ind + '#endif',
+                      ind + '/* KSU-419-SUSFS-MAYCREATE */',
+                  ]
+                  s = s[:a.end()] + '\n'.join(lines) + '\n' + s[a.end():]
+                  open(p, 'w').write(s)
+                  print('namei.c: may_create SUS_PATH check added')
+              else:
+                  print('::warning::namei.c may_create锚点未匹配, 跳过(仅损失SUS_PATH创建路径隐藏, 不影响编译)')
           else:
               print('namei.c: already patched, skip')
-          PYEOF
 
-
- 
 
 
 
