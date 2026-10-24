@@ -1009,6 +1009,60 @@ jobs:
               print('dispatch.c already patched, skip')
           PYEOF
 
+
+          echo "===== 4.19兼容: dispatch头文件 + adb_root user_stack_pointer ====="
+          python3 - <<'PYEOF'
+          import sys
+
+          p1 = 'KernelSU/kernel/supercall/dispatch.c'
+          s = open(p1).read()
+          if 'KSU-419-DISPATCH-INCL' not in s:
+              anchor = '#include "preinit/preinit.h"'
+              assert s.count(anchor) == 1, 'dispatch anchor: %d' % s.count(anchor)
+              add = '\n'.join([
+              anchor,
+              '/* KSU-419-DISPATCH-INCL: tasklist_lock lives in <linux/sched/task.h>',
+              '   on < 5.0 and in <linux/sched/signal.h> on >= 5.0; init_task is',
+              '   declared in <linux/sched/task.h>. Neither was visible on 4.19. */',
+              '#include <linux/sched/signal.h>',
+              '#include <linux/sched/task.h>',
+              ]) + '\n'
+              s = s.replace(anchor, add)
+              open(p1, 'w').write(s)
+              print('dispatch.c: sched includes added OK')
+          else:
+              print('dispatch.c already patched, skip')
+
+          p2 = 'KernelSU/kernel/feature/adb_root.c'
+          s2 = open(p2).read()
+          if 'KSU-419-USP' not in s2:
+              n = s2.count('user_stack_pointer(')
+              assert n == 1, 'user_stack_pointer calls: %d, expect 1' % n
+              anchor2 = '#include "klog.h" // IWYU pragma: keep'
+              assert s2.count(anchor2) == 1, 'adb_root anchor: %d' % s2.count(anchor2)
+              shim = '\n'.join([
+              anchor2,
+              '',
+              '/* KSU-419-USP: arm64 gained user_stack_pointer() after 4.19; old',
+              '   pt_regs stores the user SP (SP_EL0, valid for both AArch64 and',
+              '   AArch32 tasks) in user_regs.sp. */',
+              '#include <linux/version.h>',
+              '#if defined(CONFIG_ARM64) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)',
+              'static inline unsigned long ksu_user_stack_pointer(struct pt_regs *regs)',
+              '{',
+              '    return regs->user_regs.sp;',
+              '}',
+              '#define user_stack_pointer(regs) ksu_user_stack_pointer(regs)',
+              '#endif',
+              ]) + '\n'
+              s2 = s2.replace(anchor2, shim)
+              open(p2, 'w').write(s2)
+              print('adb_root.c: user_stack_pointer shim added OK')
+          else:
+              print('adb_root.c already patched, skip')
+          PYEOF
+
+
           
 
           
