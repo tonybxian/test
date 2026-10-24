@@ -1428,6 +1428,7 @@ jobs:
           fi
 
           echo "===== NoMount(非GKI内核集成) ====="
+          
           if git clone --depth=1 https://github.com/backslashxx/nomount.git nomount_repo; then
             for r in nomount_repo/README.md nomount_repo/kernel/README.md; do
               if [ -f "$r" ]; then
@@ -1465,12 +1466,35 @@ jobs:
           fi
 
           echo "===== 手动hook(非GKI) ====="
+          echo "===== NoMount v2: 官方setup.sh接管 ====="
+          if [ ! -e fs/nomount ] && [ ! -d NoMount ]; then
+          curl -fsSL https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh -o setup_nm.sh
+          if [ -f setup_nm.sh ]; then
+          sh setup_nm.sh && echo "NOMOUNT_SETUP_OK" || echo "::warning::setup.sh执行失败, 本次不含NoMount"
+          else
+          echo "::warning::setup.sh下载失败, 本次不含NoMount"
+          fi
+          else
+          echo "fs/nomount已存在, 跳过官方集成"
+          fi
+          grep -q '^CONFIG_NOMOUNT=y' "$CFG" || echo "CONFIG_NOMOUNT=y" >> "$CFG"
+          rm -f setup_nm.sh
+          echo "nomount v2 done"
+
+
+          if [ ! -f "$GITHUB_WORKSPACE/hooks.py" ]; then
+          echo "::notice::仓库无hooks.py, 走kprobes钩子模式"
+          else
+
+
           if python3 "$GITHUB_WORKSPACE/hooks.py"; then
             echo "✅ 手动hook注入成功"
           else
             echo "HOOKS_FAILED=1" >> "$GITHUB_ENV"
             echo "::warning::手动hook失败，编译时回退kprobes模式"
           fi
+          fi
+
 
           echo "===== defconfig ====="
           grep -vE '^(CONFIG_KSU|# CONFIG_KSU|CONFIG_KPROBES|# CONFIG_KPROBES)' "$CFG" > "$CFG.new" && mv "$CFG.new" "$CFG"
