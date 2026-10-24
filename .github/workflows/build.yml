@@ -141,6 +141,12 @@ jobs:
           fi
 
 
+          echo "---- susfs.h 落地版本诊断 ----"
+          grep -m1 'SUSFS_VERSION' include/linux/susfs.h 2>/dev/null || echo "❌ include/linux/susfs.h 不存在"
+          grep -c 'CMD_SUSFS' include/linux/susfs.h 2>/dev/null || true
+
+
+
           echo "===== 4.19兼容:MODULE_IMPORT_NS ====="
           grep -rl 'MODULE_IMPORT_NS(' KernelSU/kernel | while read -r f; do
             # 跳过本来就定义了兼容宏的头文件，避免自引用
