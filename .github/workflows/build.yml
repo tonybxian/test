@@ -358,7 +358,8 @@ jobs:
               s = s.replace(anchor, MARK + '\n' + blk + anchor, 1)
               changed = True
               print('namespace.c: include+IDA+CL block added')
-          if 'bypass_orig_flow' not in s:
+          if True:
+
               def wrap(m):
                   ind, args = m.group(1), m.group(2).strip()
                   if args.endswith(', 0'):
