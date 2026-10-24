@@ -92,14 +92,26 @@ jobs:
             P50=$(find susfs -name '*susfs*4.19*.patch' | head -n1)
             if [ -n "$P50" ]; then
               if git apply --check "$P50" 2>/dev/null; then
-                git apply "$P50"
-                echo "✅ susfs 4.19 内核补丁已应用"
+              git apply "$P50"
+              echo "✅ susfs 4.19 内核补丁已应用"
               elif patch -p1 -F3 --no-backup-if-mismatch --dry-run < "$P50" >/dev/null 2>&1; then
-                patch -p1 -F3 --no-backup-if-mismatch < "$P50" >/dev/null 2>&1
-                echo "⚠️ susfs补丁以fuzz方式应用"
+              patch -p1 -F3 --no-backup-if-mismatch < "$P50" >/dev/null 2>&1
+              echo "⚠️ susfs补丁以fuzz方式应用"
               else
-                echo "::warning::susfs 4.19补丁不匹配，隐藏能力可能不完整"
+              echo "---- 严格+fuzz都失败, 尝试 --reject 部分应用 ----"
+              git apply --reject "$P50" 2>.susfs_apply_err || true
+              NREJ=$(find . -name '*.rej' 2>/dev/null | wc -l)
+              if [ "$NREJ" -gt 0 ]; then
+              echo "⚠️ susfs补丁部分应用: $NREJ 个hunk被拒, 详情:"
+              head -60 .susfs_apply_err || true
+              find . -name '*.rej' | head -15
+              find . -name '*.rej' -delete
+              else
+              echo "::warning::susfs 4.19补丁完全不匹配, 隐藏能力可能不完整"
               fi
+              rm -f .susfs_apply_err
+              fi
+
             else
               echo "::warning::没找到4.19的susfs补丁"
             fi
@@ -141,12 +153,20 @@ jobs:
           fi
 
 
-          echo "---- susfs_def.h 命令诊断 ----"
-          D=include/linux/susfs_def.h
-          grep -m1 'SUSFS_VERSION' $D 2>/dev/null
-          for c in SUSFS_MAGIC CMD_SUSFS_ADD_SUS_PATH_LOOP CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS CMD_SUSFS_ADD_SUS_MAP CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING CMD_SUSFS_ADD_SUS_PATH; do
-            grep -q "$c" $D 2>/dev/null && echo "✅ $c" || echo "❌ $c"
+          echo "---- susfs 头文件诊断 v2 ----"
+          ls include/linux/susfs*.h 2>/dev/null || echo "(无 susfs 头文件)"
+          for f in include/linux/susfs.h include/linux/susfs_def.h; do
+          if [ -f "$f" ]; then
+          echo "== $f =="
+          grep -m1 'SUSFS_VERSION' "$f" || echo "(此文件无版本行, 正常)"
+          for c in SUSFS_MAGIC CMD_SUSFS_ADD_SUS_PATH CMD_SUSFS_ADD_SUS_PATH_LOOP CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS CMD_SUSFS_ADD_SUS_MAP CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING; do
+          if grep -q "$c" "$f"; then echo "  OK $c"; else echo "  MISS $c"; fi
           done
+          else
+          echo "== $f 不存在 =="
+          fi
+          done
+ 
 
 
 
