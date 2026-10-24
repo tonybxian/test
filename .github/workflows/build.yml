@@ -86,9 +86,7 @@ jobs:
 
           echo "===== SUSFS ====="
           if ! git clone --depth=1 -b kernel-4.19 https://gitlab.com/simonpunk/susfs4ksu.git susfs; then
-            if ! git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs; then
-              echo "::warning::susfs克隆失败，本次构建不含SUSFS"
-            fi
+            git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git susfs || echo "::warning::susfs克隆失败，本次构建不含SUSFS"
           fi
           if [ -d susfs/kernel_patches ]; then
             P50=$(find susfs -name '*susfs*4.19*.patch' | head -n1)
