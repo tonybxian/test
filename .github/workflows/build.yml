@@ -166,6 +166,91 @@ jobs:
           echo "== $f 不存在 =="
           fi
           done
+
+          echo "===== 4.19兼容: extension/susfs.c 缺失命令折叠 ====="
+          python3 - <<'PYEOF'
+          import re, sys
+          p = 'KernelSU/kernel/extension/susfs.c'
+          s = open(p).read()
+          if '/* KSU-419-SUSFS-LEGACY */' in s:
+              print('extension/susfs.c already patched, skip')
+              sys.exit(0)
+          mpat = re.compile(r'(?m)^([ \t]*)if \(magic2 != SUSFS_MAGIC \|\| current_uid\(\)\.val != 0\)\n([ \t]*return[^\n]*\n)')
+          mm = mpat.search(s)
+          if not mm:
+              sys.exit('magic check pattern not found — 贴出 susfs.c 前90行来对格式')
+          ind, ret = mm.group(1), mm.group(2)
+          blk = (ind + '#ifdef SUSFS_MAGIC\n'
+              + ind + 'if (magic2 != SUSFS_MAGIC || current_uid().val != 0)\n'
+              + ret
+              + ind + '#else\n'
+              + ind + 'if (current_uid().val != 0)\n'
+              + ret
+              + ind + '#endif\n')
+          s = s[:mm.start()] + blk + s[mm.end():]
+          print('magic check gated OK')
+          cmds = ['CMD_SUSFS_ADD_SUS_PATH_LOOP', 'CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS', 'CMD_SUSFS_ADD_SUS_MAP', 'CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING']
+          total = 0
+          for c in cmds:
+              pat = re.compile(r'(?m)^(?P<blk>[ \t]*case ' + c + r':\n(?:[ \t]*[^\n]*\n)*?)(?P<end>[ \t]*(?:case |default:|\}))')
+              m = pat.search(s)
+              if m:
+                  s = s[:m.start()] + '#ifdef ' + c + '\n' + m.group('blk') + '#endif\n' + m.group('end') + s[m.end():]
+                  total += 1
+                  print(c, 'folded')
+              else:
+                  print(c, 'NOT FOUND (常量可能已存在, 无需折叠)')
+          open(p, 'w').write(s)
+          print('extension/susfs.c folding done:', total, 'cases')
+          PYEOF
+
+
+
+          echo "===== 4.19兼容: INODE_STATE_SUS_KSTAT 宏修复 ====="
+          python3 - <<'PYEOF'
+          import re, os, glob, sys
+          cands = ['include/linux/susfs.h', 'include/linux/susfs_def.h', 'include/linux/fs.h']
+          defined_in = None
+          for f in cands:
+              if os.path.exists(f):
+                  if re.search(r'(?m)^#\s*define\s+INODE_STATE_SUS_KSTAT\b', open(f).read()):
+                      defined_in = f
+                      break
+          print('INODE_STATE_SUS_KSTAT defined in:', defined_in or 'NOWHERE')
+          if defined_in is None:
+              p = 'include/linux/fs.h'
+              s = open(p).read()
+              if 'INODE_STATE_SUS_KSTAT' not in s:
+                  k = s.rfind('\n#endif')
+                  assert k != -1, 'fs.h: final #endif not found'
+                  blk = ('\n#ifdef CONFIG_KSU_SUSFS\n'
+                      '/* KSU-419-SUSFS: inode state bit for susfs kstat spoofing.\n'
+                      '   4.19 i_state uses up to bit 14; bit 16 is safe. */\n'
+                      '#define INODE_STATE_SUS_KSTAT 0x00010000\n'
+                      '#endif\n')
+                  s = s[:k] + blk + s[k:]
+                  open(p, 'w').write(s)
+                  print('fs.h: INODE_STATE_SUS_KSTAT (bit16) added')
+              else:
+                  print('fs.h already has it, skip')
+          else:
+              inc = '#include <%s>' % defined_in.split('include/')[1]
+              for p in glob.glob('fs/**/*.c', recursive=True) + glob.glob('kernel/**/*.c', recursive=True):
+                  if os.path.basename(p) in ('susfs.c', 'sus_su.c'):
+                      continue
+                  s = open(p).read()
+                  if 'INODE_STATE_SUS' in s and inc not in s:
+                      ms = list(re.finditer(r'(?m)^#include[^\n]*\n', s))
+                      if ms:
+                          e = ms[-1].end()
+                          open(p, 'w').write(s[:e] + inc + '\n' + s[e:])
+                          print('added', inc, '->', p)
+          PYEOF
+          echo "---- INODE_STATE_SUS_* 使用/定义清单 ----"
+          grep -rhoE 'INODE_STATE_SUS_[A-Z_]+' fs kernel 2>/dev/null | sort | uniq -c || true
+          grep -rn 'define INODE_STATE_SUS' include/linux/ 2>/dev/null || echo "(头文件中无定义)"
+
+
  
 
 
